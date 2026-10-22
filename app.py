@@ -1,8 +1,9 @@
-"""Binance Futures Research Desk 2.2 — no authentication, no trading."""
+"""Binance Futures Research Desk 2.3 — no account access or trading."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -10,6 +11,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 from backtest import run_backtest
+from coinapi_data import CoinAPICandleStore, coinapi_contract_catalog
 from data_sources import (CORE_SYMBOLS, ESTABLISHED_SYMBOLS, DataError, data_quality,
                           get_candles, get_contract_catalog, get_derivatives_context,
                           get_live_price, get_news, screen_contracts)
@@ -17,6 +19,11 @@ from live_feed import LiveFuturesFeed
 from strategy import (RiskSettings, add_indicators, build_features, changes_log,
                       closed_four_hour_bars, directional_trade_plans,
                       proposed_levels, reasons, timeframe_snapshot)
+
+COINAPI_KEY = os.environ.get("COINAPI_KEY", "").strip()
+COINAPI_ENABLED = bool(COINAPI_KEY)
+HISTORY_SOURCE = ("CoinAPI · BinanceFTS perpetual (normalized)" if COINAPI_ENABLED
+                  else "Binance USDⓈ-M direct REST")
 
 
 st.set_page_config(page_title="Futures Research Desk", page_icon="📈", layout="wide",
@@ -35,18 +42,29 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_resource(show_spinner=False)
+def licensed_candle_store() -> CoinAPICandleStore:
+    return CoinAPICandleStore()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def load_asset(symbol: str, bars: int) -> pd.DataFrame:
+    if COINAPI_ENABLED:
+        return licensed_candle_store().get(symbol, bars, "1h", COINAPI_KEY)
     return get_candles(symbol, bars)
 
 
-@st.cache_data(ttl=240, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def load_fast(symbol: str, interval: str, bars: int = 800) -> pd.DataFrame:
+    if COINAPI_ENABLED:
+        return licensed_candle_store().get(symbol, bars, interval, COINAPI_KEY)
     return get_candles(symbol, bars, interval=interval)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_catalog() -> list[dict]:
+    if COINAPI_ENABLED:
+        return coinapi_contract_catalog(COINAPI_KEY)
     return get_contract_catalog()
 
 
@@ -57,6 +75,12 @@ def load_price(symbol: str) -> dict:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_context(symbol: str) -> dict:
+    if COINAPI_ENABLED:
+        # Do not query the Binance REST API blocked on Community Cloud. Nor
+        # present a historical provider's data as current funding/OI.
+        return {"as_of_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "errors": ["Funding, open interest and 24h change are unavailable "
+                           "through the configured historical provider."]}
     return get_derivatives_context(symbol)
 
 
@@ -103,7 +127,8 @@ def indicator_chart(frame: pd.DataFrame, symbol: str, levels: dict | None,
     fig.add_trace(go.Bar(x=recent.index, y=recent["macd_hist"], name="MACD histogram",
                          marker_color=["#24c49f" if x >= 0 else "#ff6c7c" for x in recent["macd_hist"].fillna(0)]), row=3, col=1)
     fig.update_layout(height=730, template="plotly_dark", paper_bgcolor="#0b1220",
-                      plot_bgcolor="#0f1a2c", font_color="#d4e0ed", title=f"{symbol} / {interval} completed candles (UTC)",
+                      plot_bgcolor="#0f1a2c", font_color="#d4e0ed",
+                      title=f"{symbol} / {interval} completed candles (UTC) · {HISTORY_SOURCE}",
                       margin=dict(l=15, r=12, t=45, b=10), xaxis_rangeslider_visible=False,
                       legend=dict(orientation="h", y=1.04))
     fig.update_yaxes(gridcolor="#203249")
@@ -129,13 +154,17 @@ with st.sidebar:
     if coverage == "Established watchlist":
         eligible_catalog = [x for x in eligible_catalog if x["symbol"] in ESTABLISHED_SYMBOLS]
     selected_options = [x["symbol"] for x in eligible_catalog]
+    using_backup_watchlist = not selected_options
     if not selected_options:
         # A clearly labeled fallback for temporary catalog failure. These
         # four symbols are revalidated by the candles endpoint when selected.
         selected_options = list(CORE_SYMBOLS)
     symbol = st.selectbox("Currency", selected_options,
                           format_func=lambda s: s.replace("USDT", "/USDT"))
-    st.caption(f"{len(selected_options)} selectable pairs · active USDT perpetuals · ≥180 days listed")
+    if using_backup_watchlist:
+        st.caption("Four backup watchlist pairs · provider catalog unavailable or no pair meets the current screen")
+    else:
+        st.caption(f"{len(selected_options)} screened USDT perpetuals · ≥180 days of data")
     bars = st.select_slider("History (1h candles)", options=[1200, 2400, 3600, 4800, 6000], value=2400)
     st.divider()
     st.subheader("Paper risk settings")
@@ -158,14 +187,22 @@ with st.sidebar:
         load_news.clear()
         st.session_state.pop("four_market_scan", None)
         st.rerun()
-    st.caption("Live stream shown ~1s · REST fallback 3s · fast candles 4 min · 1h candles 10 min")
+    st.caption("Live stream ~1s · completed candle data cached and refreshed as new bars close")
 
-st.markdown('''<div class="app-banner"><h2>Futures Research Desk 2.2</h2>
+st.markdown('''<div class="app-banner"><h2>Futures Research Desk 2.3</h2>
 <p>Binance USDT perpetual market screen · 5m / 15m / 1h / 4h analysis · explainable long-only 1h research signals</p></div>''',
             unsafe_allow_html=True)
+st.caption(f"**Chart / backtest source:** {HISTORY_SOURCE} · **Live last / mark / index:** Binance Futures WebSocket")
+if COINAPI_ENABLED:
+    st.info("CoinAPI redistributes normalized Binance USD-M perpetual OHLCV. Candle values and volume "
+            "can differ from Binance's native chart; all signals and backtests below use CoinAPI candles, "
+            "not the separate live quote. CoinAPI usage consumes paid/free credits.")
+else:
+    st.caption("To use licensed BinanceFTS history on Streamlit Cloud, configure COINAPI_KEY in "
+               "Manage app → Settings → Secrets. Never paste the key into GitHub or a chat message.")
 st.warning("EDUCATIONAL / PAPER TESTING ONLY. This app does not place orders. Crypto futures can cause rapid losses, and no indicator method is reliably 'best' in all markets.", icon="⚠️")
 if catalog_error:
-    st.warning("Market catalog could not refresh. Showing the original four symbols until Binance listings are available. " + catalog_error)
+    st.warning("Market catalog could not refresh. Showing the four core symbols. " + catalog_error)
 
 
 @st.fragment(run_every="1s")
@@ -269,7 +306,13 @@ with st.spinner(f"Loading {symbol} candles from Binance Futures…"):
         df = build_features(candles)
     except (DataError, ValueError, KeyError, TypeError, pd.errors.ParserError) as exc:
         st.error(f"Cannot load validated Binance futures data: {exc}")
-        st.info("Check your connection and Binance availability in your region, then click Refresh. No fabricated prices or signals are substituted.")
+        if "451" in str(exc) and not COINAPI_ENABLED:
+            st.info("Binance's direct REST API is blocked for this server. To use CoinAPI's "
+                    "licensed historical BinanceFTS data, add COINAPI_KEY to Streamlit Cloud app secrets. "
+                    "A page refresh or new domain will not resolve the server-side 451 restriction.")
+        else:
+            st.info("Check provider permissions, historical-data coverage and connection. "
+                    "No fabricated prices or signals are substituted.")
         st.stop()
 
 # Fast indicators use completed exchange 5m/15m candles. They are advisory
@@ -302,7 +345,7 @@ market_tab, chart_tab, frames_tab, test_tab, universe_tab, news_tab, log_tab, me
 with market_tab:
     st.subheader("Market overview")
     st.markdown("The original four pairs remain the core watchlist. The expanded market list is pulled from active Binance USDT perpetual contracts, screened for at least 180 days of history and a minimum 24-hour trading volume. **Binance listing is not a safety endorsement.**")
-    st.caption("Choose any screened pair from the sidebar. The core research decision remains long-only and based on completed 1h/4h candles.")
+    st.caption(f"Select a screened pair. The long-only model uses 1h/4h completed candles from {HISTORY_SOURCE}.")
     metric_cols = st.columns(4)
     metric_cols[0].metric("Last completed 1h close (NOT LIVE)", price_format(float(latest["close"])))
     metric_cols[1].metric("Rule state", str(latest["state"]))
@@ -348,12 +391,17 @@ with market_tab:
         columns[3].metric("24h price change", f"{float(ticker['priceChangePercent']):+.2f}%")
     except (KeyError, ValueError, TypeError):
         columns[3].metric("24h price change", "N/A")
-    st.caption(f"Snapshots checked around {ctx['as_of_utc']} UTC. Funding can add costs; open interest is a snapshot, not evidence of future direction.")
+    if COINAPI_ENABLED:
+        st.caption("Funding, open interest and 24h change are not supplied by the licensed "
+                   "historical OHLCV feed. They are shown as N/A, not estimated.")
+    else:
+        st.caption(f"Snapshots checked around {ctx['as_of_utc']} UTC. Funding can add costs; open interest is a snapshot, not evidence of future direction.")
     if ctx["errors"]:
-        st.warning("Some derivative snapshots were unavailable: " + " | ".join(ctx["errors"]))
+        st.info("Some derivative snapshots were unavailable: " + " | ".join(ctx["errors"]))
 
 with chart_tab:
     st.subheader("Current rule-based decision")
+    st.caption(f"Historical model data: {HISTORY_SOURCE}. The live price is a separate Binance WebSocket observation.")
     left, right = st.columns([1, 1])
     with left:
         if bool(latest["long_setup"]) and not stale and not quality["gaps"]:
@@ -421,7 +469,8 @@ with frames_tab:
 
 with universe_tab:
     st.subheader("Binance USDT perpetual market explorer")
-    st.caption("Contracts are read from Binance exchangeInfo, joined to Binance's current 24h tickers, and filtered by listing age, quote volume and contract status. Volume is in USDT equivalent; numbers are snapshots, not guaranteed liquidity for an order.")
+    st.caption(f"Screened via {HISTORY_SOURCE} metadata. Volume is 24h USD equivalent; "
+               "provider coverage and numbers may differ from Binance direct listings.")
     if eligible_catalog:
         table = pd.DataFrame([{"Pair": x["symbol"], "Last (USDT)": x["last_price"],
                                "24h change %": x["change_pct"],

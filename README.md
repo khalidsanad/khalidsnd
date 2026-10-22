@@ -1,14 +1,67 @@
-# Binance Futures Research Desk 2.2
+# Binance Futures Research Desk 2.3
 
 An explainable, beginner-friendly **Python web dashboard on your own computer** for Binance USDT-margined perpetual futures. The original BTC, ETH, SOL and BNB watchlist is preserved, and active Binance contracts can now be added through a listing-age and liquidity screen.
 
 ## Publish as a shareable website (Streamlit Community Cloud)
 
+### Hosted Binance Futures historical data via CoinAPI (v2.3)
+
+If Binance direct REST returns **HTTP 451** from Streamlit Community Cloud, the
+Python app cannot obtain Binance historical candles directly from that server.
+Version 2.3 optionally uses a **licensed third-party data vendor, CoinAPI** for
+historical **Binance USD-M perpetual** OHLCV. This is not a Binance endpoint
+mirror or a proxy. Confirm the provider's terms, coverage and your permitted use
+before enabling it. The live quote remains a **separate Binance WebSocket**.
+
+1. Create a CoinAPI Market Data account at https://www.coinapi.io/ and obtain a
+   key for access to Binance USD-M futures history (`BINANCEFTS`). CoinAPI's
+   metered plan currently advertises trial credits and paid usage thereafter.
+   Confirm the actual price and restrictions in your account before enabling it
+   on a public website; this can incur costs as visitors use the application.
+2. In Streamlit Community Cloud, sign in to https://share.streamlit.io, find
+   your app, open its **Settings → Secrets**, and paste one TOML setting:
+
+   ```toml
+   COINAPI_KEY = "YOUR-OWN-COINAPI-MARKET-DATA-KEY"
+   ```
+
+   Replace the example value with your **real key inside Streamlit Settings
+   only**. Never put the real key in GitHub, screenshots, email or a chat message.
+   Root-level Streamlit secrets are exposed to Python as environment variables.
+3. Save and reboot the app if the banner does not change. The application
+   automatically switches to CoinAPI when this setting exists. The banner
+   should identify `CoinAPI · BinanceFTS perpetual (normalized)` as the chart
+   and backtest data source. If the key is absent, the Mac/local behavior remains
+   direct Binance REST, which may still show HTTP 451 on the Cloud server.
+4. Verify recent 5m, 15m and 1h completed candle timestamps, chart continuity,
+   model warnings, and price differences before interpreting the dashboard.
+   If CoinAPI denies data entitlement, runs out of credits, provides incomplete
+   data or has missing bars, the app displays the error and does not substitute
+   another exchange's candles.
+
+**Accuracy notes:** CoinAPI standardizes OHLCV from Binance Futures trading
+activity; its candles (including volume) may differ from Binance's native
+chart. The dashboard tells you which source was used. Historical 4h bars are
+still built only from completed 1h bars. No live orders or account connections
+are created. Current funding, open interest and 24h change from Binance REST
+are marked unavailable in CoinAPI mode rather than silently retried against a
+451-blocked endpoint. News remains separate from trading signals.
+
+**Cost control:** The app caches historical bars in process memory and requests
+only newly closed periods after the first load. Reboots, cold starts, many
+distinct symbols and resource resets may still incur paid requests. Monitor
+CoinAPI usage and configure appropriate spending controls in your provider
+account. There is no billing guarantee or built-in hard spending cap.
+
+Official references: [CoinAPI Binance futures symbol coverage](https://www.coinapi.io/products/market-data-api/faq) · [CoinAPI historical OHLCV](https://www.coinapi.io/products/market-data-api/docs/rest-api/ohlcv/ohlcv/symbol_id/history/get) · [CoinAPI pricing](https://www.coinapi.io/products/market-data-api/pricing) · [Streamlit secrets](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management).
+
+### Initial deployment
+
 1. Upload the text project files to a GitHub repository. Keep `.venv`, any API keys, and private settings out of the repository.
 2. Go to https://share.streamlit.io and sign in with GitHub.
 3. Choose **Create app / Deploy an app** using this repository and its `main` branch.
 4. Set the entrypoint to **`app.py`**, use **Python 3.12** if the selector is available, and deploy. The `requirements.txt` in this folder specifies all necessary Python packages.
-5. Verify that the public page displays **fresh** Binance data, not a connection error or a REST fallback. Binance may restrict its public API for some hosting locations; if endpoints are inaccessible, the app cannot be considered successfully deployed for market research. Do not work around regional restrictions.
+5. Verify that the public page displays **fresh and source-labeled** market data. Binance may restrict its public API for some hosting locations; when blocked, use a properly licensed data feed or do not show those signals. Do not work around regional restrictions.
 6. Share the resulting `*.streamlit.app` URL. The public version is for education and paper research only; it does not trade.
 
 Streamlit Community Cloud may pause an inactive app or limit resources, so it is **not** appropriate for unattended trading, urgent alerts, or low-latency execution. Every visitor's browser may trigger independent market-data requests; respect Binance service limits. Custom domains beyond the `streamlit.app` subdomain need a separate hosting or redirect arrangement.
@@ -80,7 +133,7 @@ No additional packages are needed when upgrading from version 2.1.
 ## How to use it
 
 1. In the sidebar choose either **Established watchlist** or **Expanded Binance screen**. The latter reads Binance USDT perpetual symbols and filters them for at least 180 days listed and at least 20 million USDT of 24h trading volume by default. Select the symbol to analyze.
-2. Read the **Market overview** for closed-candle price, current rule state and funding/open interest snapshots. Click **Scan the original four markets** to compare states. The separate top panel uses Binance USDⓈ-M Futures WebSocket trades for last price, and a 1s WebSocket for mark/index prices. The panel redraws around once per second.
+2. Read the **Market overview** for closed-candle price and current rule state. Funding/open-interest snapshots are available only when direct Binance REST is accessible. Click **Scan the original four markets** to compare states. The separate top panel uses Binance USDⓈ-M Futures WebSocket trades for last price, and a 1s WebSocket for mark/index prices. The panel redraws around once per second.
 3. Open **Charts & signal** for candlesticks, moving averages, RSI, MACD, the decision reasons and indicative entry/SL/TP. Choose a **5m, 15m, 1h or 4h chart**.
    Under the chart is a separate **Long & short trade-planning table**. It shows entry, SL, TP1, TP2 and TP3 for both hypothetical directions. Choose between a fresh Binance WebSocket last trade and the completed 1h close as the entry price reference. Short levels are **not** short trade signals or backtested results.
 4. Open **Multi-timeframe** to see separate 5m, 15m, 1h and 4h trend/momentum summaries, and **Binance markets** for the screened coin list.
@@ -115,7 +168,7 @@ We use 1-hour Binance USDⓈ-M futures candles and 4-hour candles reconstructed 
 - **5m and 15m indicators:** The dashboard obtains only finished five-minute/fifteen-minute candles from Binance and calculates EMA20/50/200, RSI14, MACD histogram, ADX14, ATR14 and volume-relative-to-average. These are **additional market context**, not an untested replacement for the original 1-hour signal/backtest.
 - **Selectable charts:** 5m, 15m, 1h and 4h candle charts. The 4h chart is built from four fully closed 1-hour periods.
 - **Live price (upgraded in 2.1):** The main quote now follows public Binance aggregated futures trades over WebSocket (server pushes around 100ms; Streamlit displays around once per second). Streaming mark/index prices are shown separately. A REST V2 snapshot is shown only as a labeled fallback, and never as a guaranteed tradable execution price.
-- **Broader market universe:** Binance `exchangeInfo` and all-symbol 24h ticker feed supply actively trading USDT perpetuals, with configurable volume threshold, minimum 180 days listing history and basic exclusions for numerical multiplier/premarket/meme/alpha tags. The **screen does not verify legitimacy or prevent scams**; new and low-liquidity markets are excluded by design.
+- **Broader market universe:** With direct Binance REST, the `exchangeInfo` and 24h ticker feed supply USDT perpetual listings. With CoinAPI enabled, the provider's active `BINANCEFTS` perpetual metadata and 24h USD-equivalent volume replace these calls; listed-market coverage may differ. The basic 180-day and liquidity screen **does not verify legitimacy or prevent scams**.
 
 ### Version 2.2: planning levels for LONG and SHORT
 
@@ -137,9 +190,10 @@ There is no single 'best' technical-analysis method. This deterministic research
 
 ## Privacy and data
 
-- **Binance**: public unauthenticated endpoint `https://fapi.binance.com` (`/fapi/v1/time`, `/fapi/v1/klines`, `/fapi/v1/exchangeInfo`, `/fapi/v2/ticker/price`, `/fapi/v1/premiumIndex`, `/fapi/v1/openInterest`, `/fapi/v1/ticker/24hr`) and public WebSocket market streams at `wss://fstream.binance.com/market/stream`. The price data may be unavailable in regions where Binance is restricted. We do not attempt to work around restrictions.
+- **Binance**: public unauthenticated endpoint `https://fapi.binance.com` (`/fapi/v1/time`, `/fapi/v1/klines`, `/fapi/v1/exchangeInfo`, `/fapi/v2/ticker/price`, `/fapi/v1/premiumIndex`, `/fapi/v1/openInterest`, `/fapi/v1/ticker/24hr`) in direct mode, and public WebSocket market streams at `wss://fstream.binance.com/market/stream` for live quotes. The direct price data may be unavailable in restricted regions. We do not attempt to work around restrictions.
+- **CoinAPI** (optional): read-only paid/trial metadata and normalized BinanceFTS historical OHLCV at `https://rest.coinapi.io`. The key is a separate vendor key, never a Binance account/order credential. Use Streamlit's private secrets, and understand that public use can consume paid credits.
 - **News**: public Google News RSS search. Links open news coverage; source title, time, and heuristic topical category are shown.
-- No passwords, secrets, account statements or Binance order capabilities are collected. Streamlit runs locally on your computer.
+- No Binance credentials, account statements or order capabilities are collected. When CoinAPI is enabled, the server holds a **provider market-data key** through environment variables/Streamlit secrets and must never expose it to website visitors or source control.
 
 Docs: [Binance USDⓈ-M API](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data) · [Streamlit installation](https://docs.streamlit.io/get-started/installation/command-line).
 
@@ -153,6 +207,7 @@ Files:
 
 - `app.py` — dashboard and charts.
 - `data_sources.py` — public Binance and RSS loading with validation.
+- `coinapi_data.py` — licensed historical BinanceFTS candles and active market metadata, with incremental history caching.
 - `live_feed.py` — reconnecting thread-safe public Binance Futures WebSocket data.
 - `strategy.py` — feature calculation, closed-bar alignment, long/short hypothetical level arithmetic, and human-readable decisions.
 - `backtest.py` — execution simulation and performance report.
@@ -160,5 +215,6 @@ Files:
 - `tests/test_data_sources.py` — multi-interval data and Binance market screening tests.
 - `tests/test_app.py` — dashboard launch and chart controls smoke test.
 - `tests/test_live_feed.py` — WebSocket format, feed isolation and freshness checks.
+- `tests/test_coinapi_data.py` — CoinAPI symbol isolation, completed bars, data validation and metadata screening.
 
-**Version 2.2 — added a 2-direction, 3-target planning table under Charts & signal. WebSocket live quotes and the original completed-candle backtest remain intact. Educational research prototype; not investment advice.**
+**Version 2.3 — optional licensed CoinAPI Binance USD-M historical data for Cloud deployment. Live Binance WebSocket quotes, two-direction planning table and completed-candle backtest are retained. Educational research prototype; not investment advice.**
